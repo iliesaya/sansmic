@@ -34,6 +34,17 @@ sansmic::Scenario::Scenario() {
   jet_model_version = 1;
   plume_model_version = 1;
   temperature_model_version = 0;
+  rock_temperature = 75.0;
+  initial_brine_temperature = std::nan("");
+  // halite near 25-60 degC: k = 5 W/m-K, cp = 880 J/kg-K
+  rock_conductivity = 5.0 * 0.5778;     // Btu/hr-ft-degF
+  rock_heat_capacity = 880.0 / 4186.8;  // Btu/lb-degF
+  wall_heat_transfer = 0.0;
+  // NaN selects evaluated concentration/temperature-dependent solution
+  // enthalpy. Explicit numbers are expert constant-heat diagnostic overrides
+  // (Btu/lb).
+  heat_of_solution = std::nan("");
+  thermal_saturation_model = 0;
   coallescing_wells = 1;
   well_separation = 0.0;
   entrainment_coeff = 0.09;
@@ -92,6 +103,15 @@ void sansmic::Scenario::debug_log(ofstream &fout) {
   fout << "      plume-model-version = " << plume_model_version << std::endl;
   fout << "      temperature-model-version = " << temperature_model_version
        << std::endl;
+  fout << "      thermal-saturation-model = " << thermal_saturation_model
+       << std::endl;
+  fout << "      rock-temperature = " << rock_temperature << std::endl;
+  fout << "      initial-brine-temperature = " << initial_brine_temperature
+       << std::endl;
+  fout << "      rock-conductivity = " << rock_conductivity << std::endl;
+  fout << "      rock-heat-capacity = " << rock_heat_capacity << std::endl;
+  fout << "      wall-heat-transfer = " << wall_heat_transfer << std::endl;
+  fout << "      heat-of-solution = " << heat_of_solution << std::endl;
   fout << "      entrainment-coeff = " << entrainment_coeff << std::endl;
   fout << "      diffusion-beta-coeff = " << diffusion_beta << std::endl;
   fout << "      molecular-diffusion-coeff = " << molecular_diffusion

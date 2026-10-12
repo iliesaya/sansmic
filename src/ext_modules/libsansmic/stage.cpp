@@ -36,6 +36,7 @@ sansmic::Stage::Stage() {
   r_csgID = -1;
   r_csgOD = -1;
   Q_oil = 0;
+  T_inj = std::nan("");
   sg_raw = 1.0;
   sg_init = 1.2019;
   dt = 0.1;
@@ -70,4 +71,5 @@ void sansmic::Stage::debug_log(ofstream &fout, int stageNum) {
   fout << "    dt = " << dt << endl;
   fout << "    t-stage = " << t_stage << endl;
   fout << "    Q-oil = " << Q_oil << endl;
+  fout << "    T-inj = " << T_inj << endl;
 }

@@ -20,6 +20,20 @@ namespace py = pybind11;
 PYBIND11_MODULE(libsansmic, m) {
   m.doc() = "SANSMIC model plugin";
 
+  m.def("thermal_energy_curve", &sansmic::thermal_energy_curve,
+        py::arg("masses"), py::arg("fractions"),
+        py::arg("cp_salt") = 880.0 / 4186.8,
+        py::arg("heat_override") = std::nan(""),
+        "list[float] : brine enthalpy coefficients for layers (temperature "
+        "model)");
+  m.def("thermal_energy_at", &sansmic::thermal_energy_at, py::arg("T_F"),
+        py::arg("curve"),
+        "float : brine enthalpy (Btu) at T_F from thermal_energy_curve");
+  m.def("thermal_brine_enthalpy", &sansmic::thermal_brine_enthalpy,
+        py::arg("T_F"), py::arg("w"), py::arg("cp_salt") = 880.0 / 4186.8,
+        py::arg("heat_override") = std::nan(""),
+        "float : brine specific enthalpy (Btu/lb) relative to 75 degF");
+
   py::enum_<sansmic::LeachMode>(m, "CRunMode",
                                 "See :py:class:`sansmic.model.SimulationMode`.")
       .value("ORDINARY", sansmic::LeachMode::ORDINARY,
@@ -68,6 +82,29 @@ PYBIND11_MODULE(libsansmic, m) {
       .def_readwrite("temperature_model_version",
                      &sansmic::Scenario::temperature_model_version,
                      "int : Temperature model version, default is 0 (off)")
+      .def_readwrite("thermal_saturation_model",
+                     &sansmic::Scenario::thermal_saturation_model,
+                     "int : 0 = saturation fixed at 75 degF (default), 1 = "
+                     "temperature-dependent, precipitation rejected")
+      .def_readwrite("rock_temperature", &sansmic::Scenario::rock_temperature,
+                     "float : undisturbed salt temperature (degF), default 75")
+      .def_readwrite("initial_brine_temperature",
+                     &sansmic::Scenario::initial_brine_temperature,
+                     "float : initial brine temperature (degF), default NaN "
+                     "(equal to rock_temperature)")
+      .def_readwrite("rock_conductivity",
+                     &sansmic::Scenario::rock_conductivity,
+                     "float : salt conductivity (Btu/hr-ft-degF), default 2.889")
+      .def_readwrite("rock_heat_capacity",
+                     &sansmic::Scenario::rock_heat_capacity,
+                     "float : salt specific heat (Btu/lb-degF), default 0.2102")
+      .def_readwrite("wall_heat_transfer",
+                     &sansmic::Scenario::wall_heat_transfer,
+                     "float : brine-wall film coefficient (Btu/hr-ft2-degF), "
+                     "default 0 (perfect contact)")
+      .def_readwrite("heat_of_solution", &sansmic::Scenario::heat_of_solution,
+                     "float : expert constant-heat override (Btu/lb); "
+                     "NaN selects evaluated enthalpy")
       .def_readwrite(
           "entrainment_coeff", &sansmic::Scenario::entrainment_coeff,
           "float : Dissolution entrainment coefficient, default is 0.09")
@@ -148,7 +185,10 @@ PYBIND11_MODULE(libsansmic, m) {
       .def_readwrite("injection_duration", &sansmic::Stage::t_stage,
                      "double : injection duration (in hours)")
       .def_readwrite("fill_rate", &sansmic::Stage::Q_oil,
-                     "double : oil input rate (in bbl/d)");
+                     "double : oil input rate (in bbl/d)")
+      .def_readwrite("injection_temperature", &sansmic::Stage::T_inj,
+                     "double : injection fluid temperature (degF); NaN = not "
+                     "set");
 
   py::class_<sansmic::Salt>(m, "CSalt",
                             "A model for salt density and saturation.")
@@ -222,6 +262,30 @@ PYBIND11_MODULE(libsansmic, m) {
       .def("_get_stages", &sansmic::Model::get_stages,
            "list[CStage] : get a list of all the stages");
 
+  py::class_<sansmic::ThermalRock>(
+      m, "CThermalRock",
+      "Rock conduction grid of the temperature model (for testing)")
+      .def(py::init<double, int, double, double>(), py::arg("T_far"),
+           py::arg("n") = 80, py::arg("first") = 0.02, py::arg("depth") = 300.0)
+      .def("step", &sansmic::ThermalRock::step, py::arg("dt"), py::arg("A"),
+           py::arg("v_wall"), py::arg("k"), py::arg("rho_cp"),
+           py::arg("h_wall"), py::arg("T_b"), py::arg("C_b"), py::arg("G_in"),
+           py::arg("T_in"), py::arg("S_salt"), py::arg("Q_src"),
+           "float : advance one implicit step, return the brine temperature")
+      .def("content", &sansmic::ThermalRock::content, py::arg("A"),
+           py::arg("rho_cp"), "float : rock heat content relative to 0 degF")
+      .def("step_enthalpy", &sansmic::ThermalRock::step_enthalpy,
+           "float : advance rock and one uniform brine layer, closing the "
+           "brine enthalpy balance; return the brine temperature")
+      .def_readonly("energy_residual", &sansmic::ThermalRock::energy_residual,
+                    "float : brine enthalpy residual of the last step (Btu)")
+      .def("centres", &sansmic::ThermalRock::centres,
+           "list[float] : cell centre distances from the wall (ft)")
+      .def_readwrite("T", &sansmic::ThermalRock::T,
+                     "list[float] : rock temperatures (degF)")
+      .def_readonly("q_wall", &sansmic::ThermalRock::q_wall,
+                    "float : heat flow rock to brine in the last step (Btu/hr)");
+
   py::class_<sansmic::Results>(m, "CResults",
                                "See :class:`sansmic.model.Results`.")
       .def(py::init<>())
@@ -255,6 +319,20 @@ PYBIND11_MODULE(libsansmic, m) {
       .def_readwrite("sg_out", &sansmic::Results::sg_out, "list[float] : instantaneous outflow concentration (sg)")
       .def_readwrite("sg_cavAve", &sansmic::Results::sg_cavAve, "list[float] : instantaneous average cavern brine concentration (sg)")
       .def_readwrite("dt", &sansmic::Results::dt, "list[float] : solver timestep (h)")
+      .def_readwrite("T_brine", &sansmic::Results::T_brine, "list[float] : brine temperature (degF)")
+      .def_readwrite("sg_sat", &sansmic::Results::sg_sat, "list[float] : saturated brine sg at T_brine")
+      .def_readwrite("Q_rock", &sansmic::Results::Q_rock, "list[float] : heat flow rock to brine (MMBtu/d)")
+      .def_readwrite("H_inj", &sansmic::Results::H_inj, "list[float] : inlet-minus-outlet total enthalpy (MMBtu), not heater use")
+      .def_readwrite("H_rock", &sansmic::Results::H_rock, "list[float] : cumulative heat from rock (MMBtu)")
+      .def_readwrite("H_diss", &sansmic::Results::H_diss, "list[float] : chemical inventory/flux demand (MMBtu), not a second sink")
+      .def_readwrite("E_brine", &sansmic::Results::E_brine, "list[float] : brine enthalpy relative to 75 degF (MMBtu)")
+      .def_readwrite("H_stage", &sansmic::Results::H_stage, "list[float] : cumulative enthalpy change from stage brine resets (MMBtu)")
+      .def_readwrite("H_residual", &sansmic::Results::H_residual, "list[float] : cumulative enthalpy solver residual (MMBtu)")
+      .def_readwrite("M_salt_dissolved", &sansmic::Results::M_salt_dissolved, "list[float] : cumulative salt dissolved (lb)")
+      .def_readwrite("M_salt_correction", &sansmic::Results::M_salt_correction, "list[float] : cumulative numerical salt difference from the mass-balance correction (lb)")
+      .def_readwrite("H_native_correction", &sansmic::Results::H_native_correction, "list[float] : enthalpy of M_salt_correction (MMBtu)")
+      .def_readwrite("thermal_outlet_w", &sansmic::Results::thermal_outlet_w, "list[float] : outlet NaCl weight fraction used in the energy balance")
+      .def_readwrite("E_balance", &sansmic::Results::E_balance, "list[float] : last-step caloric inventory residual (Btu)")
       .def_readwrite("r", &sansmic::Results::r_cav, "list[list[float]] : cavern radius (ft)")
       .def_readwrite("dr_0", &sansmic::Results::dr_cav, "list[list[float]] : change in cavern radius (ft)")
       .def_readwrite("sg", &sansmic::Results::sg, "list[list[float]] : brine concentration (sg)")

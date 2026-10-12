@@ -151,7 +151,28 @@ class AdvancedOptions:
     plume_model_version: int = None  #  1
     """Plume model version; CScenario default is 1"""
     temperature_model_version: int = None  #  0
-    """Temperature model version; CScenario default is 0"""
+    """Temperature model version; CScenario default is 0 (off, fixed 75 °F).
+    1 = brine/rock energy balance with the legacy SANSMIC temperature factor on
+    the dissolution rate; 2 = energy balance with the Sandia (SAND2013-2398C)
+    temperature factor. Versions 1 and 2 require
+    :attr:`StageDefinition.brine_injection_temperature` on the first stage."""
+    rock_temperature: float = None  # 75.0
+    """Undisturbed salt temperature (°F); CScenario default is 75"""
+    initial_brine_temperature: float = None  # NaN
+    """Initial brine temperature (°F); default equal to :attr:`rock_temperature`"""
+    rock_conductivity: float = None  # 2.889
+    """Salt thermal conductivity (Btu/hr-ft-°F); CScenario default is 2.889 (5 W/m-K)"""
+    rock_heat_capacity: float = None  # 0.2102
+    """Salt specific heat (Btu/lb-°F); CScenario default is 0.2102 (880 J/kg-K)"""
+    wall_heat_transfer: float = None  # 0.0
+    """Brine-to-wall film coefficient (Btu/hr-ft²-°F); default 0 means perfect contact"""
+    heat_of_solution: float = None  # NaN selects evaluated enthalpy tables
+    """Heat absorbed per pound of NaCl dissolved (Btu/lb); CScenario default is
+    unset selects the concentration/temperature-dependent Clarke & Glew (1985)
+    integral enthalpy inventory. Explicit values are constant-heat diagnostic overrides."""
+    thermal_saturation_model: int = None
+    """0 keeps native saturation; 1 varies saturation and rejects precipitation.
+    This extension does not model a crystalline salt phase."""
     dissolution_factor: float = None  # 1.0
     """Dissolution factor; CScenario default is 1.0 - this should not be changed unless you are sure you know the effects"""
     max_brine_sg: float = None  #  1.2019
@@ -265,6 +286,10 @@ class StageDefinition:
     """The depth below surface/:term:`ZDP` where the end of the production string/casing/tubing is positioned."""
     brine_injection_rate: Union[float, str] = 0
     """The meaning of this field is based on the type of data that is provided (a value of 0 means off)."""
+    brine_injection_temperature: float = None
+    """The temperature (°F) of the injected water/brine. Only used by the temperature
+    model (:attr:`AdvancedOptions.temperature_model_version` > 0); None keeps the
+    previous stage's value."""
 
     set_initial_conditions: bool = None
     """Unlink initial cavern brine gravity and interface level from previous stage.
@@ -724,6 +749,8 @@ class StageDefinition:
             else self.inner_tbg_outside_diam / 2.0
         )
         stage.injection_fluid_sg = self.brine_injection_sg
+        if self.brine_injection_temperature is not None:
+            stage.injection_temperature = float(self.brine_injection_temperature)
         stage.cavern_sg = self.set_cavern_sg if self.set_cavern_sg is not None else 0.0
         stage.timestep = self.solver_timestep
         stage.injection_duration = self.injection_duration
@@ -997,6 +1024,24 @@ class Scenario:
         if self.advanced.solid_density is not None:
             cscenario.solid_density = self.advanced.solid_density
 
+        for name in (
+            "rock_temperature",
+            "initial_brine_temperature",
+            "rock_conductivity",
+            "rock_heat_capacity",
+            "wall_heat_transfer",
+            "heat_of_solution",
+            "thermal_saturation_model",
+        ):
+            if getattr(self.advanced, name) is not None:
+                value = getattr(self.advanced, name)
+                if name == "thermal_saturation_model":
+                    if isinstance(value, bool) or value not in (0, 1):
+                        raise ValueError(f"{name} must be 0 or 1")
+                    value = int(value)
+                else:
+                    value = float(value)
+                setattr(cscenario, name, value)
         if self.advanced.temperature_model_version is not None:
             cscenario.temperature_model_version = (
                 self.advanced.temperature_model_version
@@ -1366,6 +1411,25 @@ class Results:
                 dt_h=data.dt,
             ),
         )
+        # temperature model outputs (not present in classic output files)
+        for name in (
+            "T_brine",
+            "sg_sat",
+            "Q_rock",
+            "H_inj",
+            "H_rock",
+            "H_diss",
+            "E_balance",
+            "thermal_outlet_w",
+            "M_salt_correction",
+            "M_salt_dissolved",
+            "E_brine",
+            "H_stage",
+            "H_residual",
+            "H_native_correction",
+        ):
+            if hasattr(data, name):
+                self.df_t_1D[name] = getattr(data, name)
         self.df_t_1D.index.set_names(["save_idx"], inplace=True)
 
         self.df_t_z_2D = pd.DataFrame.from_dict(
@@ -1486,6 +1550,17 @@ class Results:
     def cavern_volume(self) -> pd.Series:
         """Total cavern volume, by timestep"""
         return self.df_t_1D.V_cav
+
+    @property
+    def brine_temperature(self) -> pd.Series:
+        """Brine temperature (°F), by timestep; constant 75 °F unless the
+        temperature model is enabled"""
+        return self.df_t_1D.T_brine
+
+    @property
+    def saturated_brine_sg(self) -> pd.Series:
+        """Saturated brine specific gravity at the brine temperature, by timestep"""
+        return self.df_t_1D.sg_sat
 
     @property
     def cumulative_insoluble_material_volume(self) -> pd.Series:

@@ -19,6 +19,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -190,6 +191,7 @@ void sansmic::Model::configure(Scenario scenario) {
 
   dz = h_max / double(n_cells);
   diffCoeff = D_mol;
+  thermal_configure(scenario);
   C_hat = salt->get_sg_max();
   C_wall = salt->get_solid_density();
   w_hat = salt->wt_pct(C_hat, temp);
@@ -295,6 +297,7 @@ void sansmic::Model::configure(Scenario scenario) {
  */
 int sansmic::Model::init_stage(void) {
   sansmic::Stage stage = stages[stageNum];
+  double oldStageEnergy = E_brineCurrent;
 
   // save the OBI (will be 0.0 if this is the first stage)
   h_obiSave = h_obi;
@@ -327,6 +330,22 @@ int sansmic::Model::init_stage(void) {
   dt = stage.dt;
   t_end = stage.t_stage;
   Q_fill = stage.Q_oil;
+  if (tempModelVer > 0) {
+    if (!std::isnan(stage.T_inj)) {
+      if (stage.T_inj < 32.0 || stage.T_inj > 300.0) {
+        throw std::invalid_argument(
+            "injection temperature must be between 32 and 300 degF");
+      }
+      if (std::isnan(dH_soln) && (stage.T_inj < 50.0 || stage.T_inj > 140.0))
+        throw std::invalid_argument(
+            "evaluated injection enthalpy is limited to 50-140 degF");
+      T_injStage = stage.T_inj;
+    } else if (stageNum == 0) {
+      throw std::invalid_argument(
+          "the temperature model requires an injection temperature for the "
+          "first stage");
+    }
+  }
 
   if (stopCriteria > 0) {
     V_stop = double(stopCriteria);
@@ -352,8 +371,27 @@ int sansmic::Model::init_stage(void) {
   }
 
   // bound concentrations
-  C_inj = bound(C_inj, 1.0, C_hat);
+  if (tempModelVer == 0) C_inj = bound(C_inj, 1.0, C_hat);
+  if (tempModelVer > 0 && (C_cav0 < 1.0 || C_cav0 > C_hat + 1e-10) &&
+      C_cav0 > 0.0)
+    throw std::invalid_argument(
+        "thermal initial brine requires precipitation or invalid SG; "
+        "composition was not changed");
   C_cav0 = bound(C_cav0, 1.0, C_hat);
+  if (tempModelVer > 0) {
+    // injected brine cannot exceed saturation at its own temperature
+    if (!std::isfinite(C_inj) || C_inj < 1.0 ||
+        C_inj > (thermalSaturationModel ? thermal_sg_sat(T_injStage) : C_sat0) +
+                    1.0e-10 ||
+        C_inj > C_hat + 1.0e-10)
+      throw std::invalid_argument(
+          "thermal inlet requires solid-phase precipitation or invalid SG; "
+          "composition was not changed");
+    if (runMode != ORDINARY)
+      throw std::invalid_argument(
+          "thermal extension currently supports ordinary leaching only; use "
+          "version 0 for withdrawal/leach-fill");
+  }
 
   // get the plume radius based on the outer casing OD and inner casing ID
   r_csgOD = r_csgOD * in_to_ft;
@@ -477,6 +515,12 @@ int sansmic::Model::init_stage(void) {
   t = 0.0;
   V_saltRemove[obiCell] = 0.0;
 
+  if (tempModelVer > 0) {
+    E_brineCurrent = thermal_energy_at(T_brine, thermal_profile_curve());
+    // Entered initial conditions / explicit blanket or brine resets introduce
+    // inventory at the current bulk T. This is an allowance, not heater heat.
+    H_stageCum += E_brineCurrent - oldStageEnergy;
+  }
   // stage has been initialized
   b_is_running = true;  // This says the stage has been initialized
   stageNum++;           // Increment the stage number
@@ -571,6 +615,10 @@ int sansmic::Model::leach() {
   }
 
   double t_add = 0;
+
+  // temperature model: saturation at the current brine temperature
+  thermal_update_saturation();
+  thermal_prepare();
 
   // Convert back to BPD? Ugh.
   Q_inBPD = Q_in * cf_to_bbl * per_h_to_per_d;
@@ -727,8 +775,8 @@ int sansmic::Model::leach() {
   f_dis_prt[jetPlumeCell] = f_dis[jetPlumeCell];
 
   // evaluate eqn 4.1 and multiple by dis factor at jet cell
-  dr_dt = salt->recession_rate(C_cav[jetPlumeCell]) * 60.0 *
-          x_incl[jetPlumeCell] * f_dis[jetPlumeCell];
+  dr_dt = wall_rate(C_cav[jetPlumeCell]) * 60.0 * x_incl[jetPlumeCell] *
+          f_dis[jetPlumeCell];
   dr_prt[jetPlumeCell] = dr_dt * dt;
   V_saltRemove[jetPlumeCell] =
       2.0 * dr_dt * r_cav[jetPlumeCell] * dz * dt * C_wall;
@@ -738,7 +786,7 @@ int sansmic::Model::leach() {
     for (int i = injCell; i <= jetPlumeCellBelow; i++) {
       slope(i);
       f_dis_prt[i] = f_dis[i];
-      dr_dt = salt->recession_rate(C_cav[i]) * 60.0 * x_incl[i] * f_dis[i];
+      dr_dt = wall_rate(C_cav[i]) * 60.0 * x_incl[i] * f_dis[i];
       dr_prt[i] = dr_dt * dt;
       V_saltRemove[i] = 2.0 * dr_dt * r_cav[i] * dz * dt * C_wall;
       m_saltRemove = m_saltRemove + V_saltRemove[i];
@@ -771,7 +819,7 @@ int sansmic::Model::leach() {
     slope(i);
     f_dis_prt[i] = f_dis[i];
 
-    dr_dt = salt->recession_rate(C_cav[i]) * 60.0 * f_dis[i];
+    dr_dt = wall_rate(C_cav[i]) * 60.0 * f_dis[i];
     dr_prt[i] = dr_dt * dt * x_incl[i];
 
     volRemoved =
@@ -1176,6 +1224,9 @@ int sansmic::Model::leach() {
     C_cavAve = C_cavAve + C_cav[i];
   }
   C_cavAve = C_cavAve / max(1, (obiCell - 2));
+
+  // temperature model: brine and rock temperatures at the end of the step
+  thermal_step();
   z_obi = z_cav[1] - h_obi;
   z_ullage = z_cav[1] - h_uso;  // z ullage = z TD - h ullage standoff
   V_used = xnterp_dkr(z_obi, depdkr, voldkr, n_nodes);

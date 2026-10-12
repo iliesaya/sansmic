@@ -19,6 +19,7 @@
  */
 sansmic::Salt::Salt(void) {
   C_sat = 1.2019;  // sg
+  w_max = 0.2632;  // weight fraction at C_sat
   rho_s = 2.16;    // g/cm^3
   a_[0] = 7.6091661297e-1;
   a_[1] = -3.8715516531;
@@ -38,6 +39,7 @@ sansmic::Salt::Salt(void) {
  */
 sansmic::Salt::Salt(double sg_max, double rho_solid) {
   C_sat = sg_max;
+  w_max = 0.2632;
   rho_s = rho_solid;
   a_[0] = 7.6091661297e-1;
   a_[1] = -3.8715516531;
@@ -61,6 +63,15 @@ void sansmic::Salt::set_sg_max(double sg_max) { C_sat = sg_max; }
  * @return (double) saturated brine specific gravity
  */
 double sansmic::Salt::get_sg_max(void) { return C_sat; }
+
+/**
+ * @brief Set the weight fraction of saturated brine (used by the temperature
+ * model, which raises saturation above the 75 degF value of 0.2632).
+ * @param wt_max weight fraction (lb NaCl / lb brine)
+ */
+void sansmic::Salt::set_wt_max(double wt_max) { w_max = wt_max; }
+
+double sansmic::Salt::get_wt_max(void) { return w_max; }
 
 /**
  * @brief Set the solid density value
@@ -121,7 +132,7 @@ double sansmic::Salt::wt_pct(double sg, double temp) {
   if (sg <= 1.0726) {
     x = (sg - 1.0) / 0.726;
   } else if (sg >= C_sat) {
-    x = 0.2632;
+    x = w_max;
   } else {
     delta = c_[1] * c_[1] + 4.0 * c_[2] * (sg - c_[0]);
     x = 0.5 * (sqrt(delta) - c_[1]) / c_[2];
@@ -141,7 +152,7 @@ double sansmic::Salt::sg(double wt_pct, double temp) {
   y = wt_pct / (1.0 + 0.000353 * (temp - 75.0));
   if (y <= 0.1) {
     sg = 1.0 + 0.726 * y;
-  } else if (y >= 0.2632) {
+  } else if (y >= w_max) {
     sg = C_sat;
   } else {
     sg = fmin(c_[0] + c_[1] * y + c_[2] * y * y, C_sat);

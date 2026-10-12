@@ -21,6 +21,12 @@
 using namespace std;
 
 namespace sansmic {
+vector<double> thermal_energy_curve(vector<double> masses,
+                                    vector<double> fractions, double cp_salt,
+                                    double heat_override = std::nan(""));
+double thermal_energy_at(double T_F, const vector<double> &curve);
+double thermal_brine_enthalpy(double T_F, double w, double cp_salt,
+                              double heat_override = std::nan(""));
 
 // physical constants and conversion factors
 const double _pi_ = 3.141592653589793;        //!< pi without having to import
@@ -46,6 +52,9 @@ const double hour = 3600.0;                         //!< s / h
 const double day = 86400.0;                         //!< s / d
 const double julian_year = 86400.0 * 365.25;        //!< s / aⱼ
 const double per_d_to_per_h = hour / day;           //!< h / d
+const double water_density_lb_cf =
+    62.428;  //!< density of water (SG 1.0), lb/ft³
+const double btu_per_lb_to_kj_per_kg = 2.326;       //!< 1 Btu/lb := *y* kJ/kg
 const double per_h_to_per_d = day / hour;           //!< d / h
 
 // error codes
@@ -123,6 +132,8 @@ struct Stage {
   double dt;       //!< timestep (in hours)
   double t_stage;  //!< injection duration (in hours)
   double Q_oil;    //!< fill rate for LeachFill mode (in bbl/hr)
+  double T_inj;    //!< injection fluid temperature (degF); NaN means not set
+                   //!< (only used when the temperature model is enabled)
 };
 
 // Scenario struct definitions in "scenario.cpp"
@@ -155,7 +166,22 @@ struct Scenario {
   // advanced settings;
   int jet_model_version;          //!< the ver for the jet model (0 = off)
   int plume_model_version;        //!< the ver for the plume model (always 1)
-  int temperature_model_version;  //!< the ver for the temp model (always 0)
+  int temperature_model_version;  //!< temperature model: 0 = off (fixed 75
+                                  //!< degF), 1 = brine/rock energy balance with
+                                  //!< the legacy SANSMIC rate factor, 2 = with
+                                  //!< the Sandia (SAND2013-2398C) rate factor
+
+  // temperature model settings (used only if temperature_model_version > 0)
+  double rock_temperature;           //!< undisturbed salt temperature (degF)
+  double initial_brine_temperature;  //!< initial brine temperature (degF);
+                                     //!< NaN means equal to rock_temperature
+  double rock_conductivity;      //!< salt thermal conductivity (Btu/hr-ft-degF)
+  double rock_heat_capacity;     //!< salt specific heat (Btu/lb-degF)
+  double wall_heat_transfer;     //!< brine-wall film coefficient
+                                 //!< (Btu/hr-ft²-degF); 0 = perfect contact
+  int thermal_saturation_model;  //!< 0 fixed native saturation; 1 variable,
+                                 //!< reject phase change
+  double heat_of_solution;  //!< heat absorbed per lb NaCl dissolved (Btu/lb)
 
   double max_brine_sg;         //!< maximum brine density
   double solid_density;        //!< solid density of salt rock
@@ -192,9 +218,12 @@ class Salt {
   double wt_pct(double sg, double temp = 75.0);
   double sg(double wt_pct, double temp = 75.0);
   double recession_rate(double sg);
+  void set_wt_max(double wt_max);
+  double get_wt_max(void);
 
  private:
   double C_sat;  //!< specific gravity of saturated brine
+  double w_max;  //!< weight fraction of saturated brine (default 0.2632)
   double rho_s;  //!< density of the surrounding rock in g/cm^3
 
   array<double, 6> a_;  //!< the coeff for wall recession rate formula
@@ -353,6 +382,26 @@ struct Results {
   vector<double> sg_out;       //!< outlet specific gravity
   vector<double> sg_cavAve;    //!< cavern average specific gravity
   vector<double> dt;           //!< timestep (in case stage changes)
+  vector<double> T_brine;      //!< brine temperature (degF)
+  vector<double> sg_sat;       //!< saturated brine sg at T_brine
+  vector<double> Q_rock;       //!< heat flow rock -> brine (MMBtu/d)
+  vector<double> H_inj;        //!< inlet-minus-outlet total enthalpy (MMBtu)
+  vector<double> H_rock;       //!< cumulative heat from rock (MMBtu)
+  vector<double> H_diss;       //!< cumulative heat absorbed by dissolution
+                               //!< (MMBtu)
+  vector<double> E_brine;      //!< modeled brine enthalpy inventory, MMBtu
+  vector<double>
+      H_stage;  //!< initialisation/interface-reset inventory allowance, MMBtu
+  vector<double> H_residual;  //!< cumulative signed caloric residual, MMBtu
+  vector<double>
+      M_salt_dissolved;  //!< dissolved salt (lb), thermal diagnostic only
+  vector<double> M_salt_correction;
+  vector<double> H_native_correction;
+  vector<double>
+      thermal_outlet_w;  //!< native outlet fraction used by the caloric node
+  vector<double> E_balance;  //!< last-step caloric inventory residual (Btu)
+                             //!< zero: precipitation is rejected when brine
+                             //!< exceeds the falling saturation
 
   /* data by time and cell */
   vector<vector<double> > r_cav;    //!< cavern radius
@@ -374,6 +423,41 @@ struct Results {
   vector<vector<double> > C_plm;    //!< plume sg
   vector<vector<double> > u_plm;    //!< plume veloctiy
   vector<vector<double> > r_plm;    //!< plume radius
+};
+
+// ThermalRock definition in "thermal.cpp"
+/// @brief Transient conduction in the salt around the cavern, coupled
+/// implicitly to one well-mixed brine node (used by the temperature model).
+class ThermalRock {
+ public:
+  ThermalRock(double T_far, int n = 80, double first = 0.02,
+              double depth = 300.0);
+  double step(double dt, double A, double v_wall, double k, double rho_cp,
+              double h_wall, double T_b, double C_b, double G_in, double T_in,
+              double S_salt, double Q_src);
+  double content(double A, double rho_cp);
+  double cell_volume(int k, double A);
+  vector<double> centres(void);
+  double step_enthalpy(double dt, double A, double v_wall, double k,
+                       double rho_cp, double h_wall, double T_b, double M_old,
+                       double w_old, double M_new, double w_new, double M_in,
+                       double w_in, double T_in, double M_salt, double M_out,
+                       double w_out, double cp_salt, double heat_override);
+  double step_inventory(double dt, double A, double v_wall, double k,
+                        double rho_cp, double h_wall, double T_b, double E_old,
+                        const vector<double> &curve, double M_new, double w_new,
+                        double w_conserved, double M_in, double w_in,
+                        double T_in, double M_salt, double M_out, double w_out,
+                        double cp_salt, double heat_override);
+  double energy_residual = 0.0;
+
+  vector<double> T;  //!< rock cell temperatures (degF)
+  double q_wall;     //!< heat flow rock -> brine in the last step (Btu/hr)
+  double T_far;      //!< undisturbed far-field temperature (degF)
+
+ private:
+  vector<double> xi;  //!< cell centres, distance from the wall (ft)
+  vector<double> xf;  //!< cell faces, distance from the wall (ft)
 };
 
 // The pieces of the model that are accessed by multiple functions
@@ -467,6 +551,22 @@ class BaseModel {
   vector<double> x_incl;        //!< wall angle factor
   vector<double> z_cav;         //!< cell measured depths
   vector<int> f_disType;        //!< dissolution regime indicator
+
+  // temperature model state (constant 75 degF when the model is off)
+  double T_brine = 75.0;     //!< brine temperature (degF)
+  double Q_rockRate = 0.0;   //!< heat flow rock -> brine (Btu/hr)
+  double H_injCum = 0.0;     //!< cumulative injection heat (Btu)
+  double H_rockCum = 0.0;    //!< cumulative rock heat (Btu)
+  double H_dissCum = 0.0;    //!< cumulative dissolution heat (Btu)
+  double thermal_outlet_fraction = 0.0;
+  double E_brineCurrent = 0.0;
+  double H_stageCum = 0.0;
+  double H_residualCum = 0.0;
+  double M_saltDissolvedCum = 0.0;   // active thermal diagnostic, lb
+  double M_saltCorrectionCum = 0.0;  // numerical species reconciliation, lb
+  double H_nativeCorrectionCum =
+      0.0;                 // enthalpy of numerical reconciliation, Btu
+  double E_balance = 0.0;  //!< last-step caloric inventory residual (Btu)
 
   void save_results(Results &new_results);
 
@@ -656,6 +756,32 @@ class Model : public BaseModel {
   vector<double> vec_C;   // C-overline in (2.8)
   vector<double> vec_D;   // D-overline in (2.8)
   vector<double> voldkr;  // temp variable for ullage
+
+  // temperature model (see thermal.cpp)
+  Salt *salt75 = NULL;       //!< salt at the 75 degF reference saturation
+  double T_rock = 75.0;      //!< undisturbed rock temperature (degF)
+  double T_injStage = 75.0;  //!< injection temperature for this stage (degF)
+  double k_rock = 0.0;       //!< rock conductivity (Btu/hr-ft-degF)
+  double cp_rock = 0.0;      //!< rock specific heat (Btu/lb-degF)
+  double h_wall = 0.0;       //!< wall film coefficient (Btu/hr-ft²-degF)
+  double dH_soln = 0.0;      //!< heat of solution (Btu/lb)
+  double C_sat0 = 1.2019;    //!< configured saturated sg (75 degF)
+  ThermalRock *rock = NULL;  //!< rock conduction grid
+  void thermal_configure(Scenario &scenario);
+  void thermal_update_saturation(void);
+  void thermal_step(void);
+  void thermal_prepare(void);
+  double thermal_mean_fraction(void);
+  vector<double> thermal_profile_curve(void);
+  double thermal_old_energy = 0.0;
+  double thermal_old_chemical = 0.0;
+  double thermal_old_mass = 0.0;
+  double thermal_old_fraction = 0.0;
+  int thermalSaturationModel = 0;
+  double wall_rate(double sg);
+  double thermal_wt_sat(double T);
+  double thermal_sg_sat(double T);
+  double thermal_rate_factor(double T, double s);
 
   int leach();
   double brine_mass(double dz);

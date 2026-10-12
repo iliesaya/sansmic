@@ -81,10 +81,17 @@ The `[advanced]`_ section keys are
 * :confval:`molecular-diffusion`
 * :confval:`eddy-coefficient`
 * :confval:`diffusion-beta`
+* :confval:`temperature-model-version`
+* :confval:`rock-temperature`
+* :confval:`initial-brine-temperature`
+* :confval:`rock-conductivity`
+* :confval:`rock-heat-capacity`
+* :confval:`wall-heat-transfer`
+* :confval:`heat-of-solution`
+* :confval:`thermal-saturation-model`
 
 ..
     * :confval:`plume-model-version`
-    * :confval:`temperature-model-version`
 
 
 The `[[stages]]`_ table require that **all** of the following
@@ -114,6 +121,8 @@ Finally, the following options are optional or are only required
 in a certain :confval:`simulation-mode`
 
 * :confval:`set-initial-conditions`
+* :confval:`brine-injection-temperature` (required for the first stage
+  when :confval:`temperature-model-version` is 1 or 2)
 * :confval:`product-injection-rate`
 * :confval:`stop-condition`
 * :confval:`stop-value`
@@ -358,8 +367,61 @@ are still available.
     `plume-model-version`
     ~~~~~~~~~~~~~~~~~~~~~~~
 
-    `temperature-model-version`
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. confval:: temperature-model-version
+
+    By default (0) the brine is at a fixed 75 °F, as in the FORTRAN code.
+    Versions 1 and 2 add a brine and rock energy balance and a
+    temperature-dependent dissolution rate: version 1 with the legacy SANSMIC
+    temperature factor, version 2 with the Sandia (SAND2013-2398C) regression.
+    Ordinary leaching with one well only; the first stage must set
+    :confval:`brine-injection-temperature`. Temperatures are in °F. See
+    :doc:`temperature` for the equations, outputs, checks and limits.
+
+
+.. confval:: rock-temperature
+
+    Undisturbed salt temperature (°F), by default 75.
+
+
+.. confval:: initial-brine-temperature
+
+    Brine temperature (°F) at the start of the simulation; by default
+    equal to :confval:`rock-temperature`.
+
+
+.. confval:: rock-conductivity
+
+    Thermal conductivity of the salt (Btu/hr-ft-°F), by default 2.889
+    (5 W/m-K).
+
+
+.. confval:: rock-heat-capacity
+
+    Specific heat of the salt (Btu/lb-°F), by default 0.2102 (880 J/kg-K).
+    The salt density is :confval:`solid-density`.
+
+
+.. confval:: wall-heat-transfer
+
+    Brine-to-wall film coefficient (Btu/hr-ft²-°F). The default, 0,
+    means perfect thermal contact (wall at the brine temperature).
+
+
+.. confval:: heat-of-solution
+
+    Unset (the default) selects the evaluated integral enthalpy inventory.
+    An explicit value selects a constant-heat diagnostic override in Btu/lb.
+    Zero removes the chemical enthalpy term for diagnostic tests; it does not
+    impose a constant temperature or supply calibrated calorimetry.
+
+
+.. confval:: thermal-saturation-model
+
+    Default 0 retains native 75 °F saturation, while calculating temperature
+    and its kinetic response. This omits temperature-dependent carrying capacity.
+    Value 1 enables the Potter solubility shift and rejects precipitation.
+    This option does not supply a solid-phase mass or energy model.
 
 
 .. confval:: dissolution-factor
@@ -536,6 +598,14 @@ number of stages. A stage **requires** a title key.
     Variable injection rates are still in the process of being
     implemented. The brine/raw water is injected at a constant
     rate over the entire injection duration.
+
+
+.. confval:: brine-injection-temperature
+
+    Temperature (°F) of the injected water or brine. Only used when
+    :confval:`temperature-model-version` is 1 or 2, in which case the
+    first stage must set it; later stages keep the previous value
+    unless they set their own.
 
 
 .. confval:: brine-injection-depth

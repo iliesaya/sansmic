@@ -8,6 +8,7 @@ User Guide
     um/getting-started
     um/running-sansmic
     um/scenarios
+    um/temperature
     examples/examples
     references
     nomenclature

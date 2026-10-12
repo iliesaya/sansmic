@@ -203,6 +203,22 @@ void sansmic::BaseModel::save_results(sansmic::Results &new_results) {
   new_results.h_insol.push_back(h_insol);
   new_results.z_insol.push_back(z_cav[1] - h_insol);
   new_results.z_obi.push_back(z_cav[1] - h_obi);
+
+  // temperature model outputs (constant when the model is off)
+  new_results.T_brine.push_back(T_brine);
+  new_results.sg_sat.push_back(salt->get_sg_max());
+  new_results.Q_rock.push_back(Q_rockRate * 24.0 * 1.0e-6);
+  new_results.H_inj.push_back(H_injCum * 1.0e-6);
+  new_results.H_rock.push_back(H_rockCum * 1.0e-6);
+  new_results.H_diss.push_back(H_dissCum * 1.0e-6);
+  new_results.E_brine.push_back(E_brineCurrent * 1e-6);
+  new_results.H_stage.push_back(H_stageCum * 1e-6);
+  new_results.H_residual.push_back(H_residualCum * 1e-6);
+  new_results.M_salt_dissolved.push_back(M_saltDissolvedCum);
+  new_results.M_salt_correction.push_back(M_saltCorrectionCum);
+  new_results.H_native_correction.push_back(H_nativeCorrectionCum * 1.0e-6);
+  new_results.E_balance.push_back(E_balance);
+  new_results.thermal_outlet_w.push_back(thermal_outlet_fraction);
 }
 
 /**
