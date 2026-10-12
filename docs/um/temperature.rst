@@ -157,7 +157,8 @@ Scope and limits
   injects as much water as the cavity holds (common at startup from a small
   borehole), SANSMIC's mass-balance correction becomes large and the run
   stops with an error asking for a smaller timestep. Short initial stages
-  with small timesteps avoid this.
+  with small timesteps can avoid this; whether a given startup schedule is
+  sufficient has to be checked for each setup.
 * The temperature response of the dissolution rate comes from laboratory
   smooth-sample measurements applied to SANSMIC's empirical 75 °F curve.
 * Not validated against a measured thermal cavern.

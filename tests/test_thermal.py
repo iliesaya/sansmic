@@ -1,6 +1,7 @@
 # coding: utf-8
 """Tests for the optional temperature model (temperature_model_version > 0)."""
 
+import copy
 import math
 import tempfile
 import unittest
@@ -395,6 +396,57 @@ class TestPrecipitationCheck(unittest.TestCase):
         self.assertEqual(
             LIB.thermal_first_supersaturated(sg, [1.0, 1.0, 0.3], sat_50F), 2
         )
+
+    def test_model_rejects_supersaturated_interface_cell(self):
+        # Cells above the blanket are reset to saturation every step. While
+        # injection cools the brine, raising the blanket by one cell in a new
+        # stage leaves the newly wetted, partly filled interface cell slightly
+        # above the (now lower) saturation, while the brine below is diluted.
+        cells, height, floor = 100, 600.0, 4000.0
+        dz = height / cells
+        scenario = sansmic.model.Scenario(
+            title="interface cell",
+            num_cells=cells,
+            cavern_height=height,
+            floor_depth=floor,
+            geometry_data={"radii": [20.0] * (cells + 1)},
+            geometry_format=sansmic.model.GeometryFormat.RADIUS_LIST,
+            units=sansmic.model.Units.FT_IN_BBL,
+            insolubles_ratio=0.0,
+            advanced=sansmic.model.AdvancedOptions(
+                temperature_model_version=2,
+                rock_temperature=75.0,
+                thermal_saturation_model=1,
+            ),
+        )
+        first = sansmic.model.StageDefinition(
+            title="cool",
+            simulation_mode=sansmic.model.SimulationMode.ORDINARY,
+            solver_timestep=0.1,
+            save_frequency=10,
+            injection_duration=24.0,
+            rest_duration=0,
+            inner_tbg_inside_diam=4.0,
+            inner_tbg_outside_diam=4.5,
+            outer_csg_inside_diam=8.0,
+            outer_csg_outside_diam=8.6,
+            brine_injection_sg=1.0,
+            brine_injection_depth=3990.0,
+            brine_production_depth=3900.0,
+            brine_injection_rate=20000.0,
+            brine_injection_temperature=60.0,
+            set_initial_conditions=True,
+            set_cavern_sg=1.2,
+            brine_interface_depth=floor - 79.3 * dz,  # interface cell 80
+            product_injection_rate=0.0,
+        )
+        second = copy.deepcopy(first)
+        second.set_initial_conditions = False
+        second.set_cavern_sg = None
+        second.brine_interface_depth = floor - 80.3 * dz  # interface cell 81
+        scenario.stages.extend([first, second])
+        with self.assertRaisesRegex(ValueError, "cell=81 "):
+            run(scenario)
 
     def test_dry_layers_and_undersaturated_brine_pass(self):
         sat_50F = 1.20064
