@@ -17,16 +17,25 @@
  * with M the layer mass, w the NaCl weight fraction, cp_s the halite specific
  * heat (water cp = 1 Btu/lb-degF) and Q the integral heat of solution per lb
  * NaCl at molality m, interpolated in the Clarke & Glew (1985) Table 25A
- * (10-60 degC, atmospheric pressure; caloric_data.hpp). Layer masses are scaled
- * to SANSMIC's tracked brine mass. Over a step,
+ * (10-60 degC, atmospheric pressure; caloric_data.hpp). The table ends at the
+ * saturation molality of each temperature (6.106-6.341 mol/kg); above 6 mol/kg
+ * the last table segment is extended linearly, and states above 6.4 mol/kg are
+ * rejected. Layer masses are scaled to SANSMIC's tracked brine mass. Over a
+ * step,
  *
- *     H_new(T) + M_out h(T, w_out) - H_old - M_in h(T_in, w_in)
+ *     H_new(T) - dH_native(T) + M_out h(T, w_out) - H_old - M_in h(T_in, w_in)
  *         - M_salt cp_s (T_wall - 75) - Q_rock dt = 0,
  *
- * solved for T. M_out is the mass leaving according to SANSMIC's own mass
- * ledger and w_out the production-cell salinity. Dissolved salt enters at the
- * wall temperature; its chemical heat is in H_new through Q. A constant
- * heat_of_solution replaces Q for diagnostics only.
+ * solved for T, where dH_native(T) = M_new [h(T, w_new) - h(T, w_conserved)].
+ * w_new is the mean salinity of SANSMIC's corrected concentration field and
+ * w_conserved the mean salinity implied by the salt and mass ledger
+ * (old salt + inflow salt + dissolved salt - outflow salt). dH_native is a
+ * bulk-composition allowance for SANSMIC's numerical salt difference, at the
+ * mean salinity, unlike the layered inventory H_new. M_out is the mass leaving
+ * according to SANSMIC's own mass ledger and w_out the production-cell
+ * salinity. Dissolved salt enters at the wall temperature; its chemical heat is
+ * in H_new through Q. A constant heat_of_solution replaces Q for diagnostics
+ * only.
  *
  * SANSMIC's mass-balance correction (CFAC) adjusts concentrations without
  * conserving a separately reconstructed salt inventory exactly. That numerical
@@ -165,17 +174,34 @@ void sansmic::Model::thermal_update_saturation(void) {
     throw std::invalid_argument(
         "thermal inlet exceeds cavern saturation; solid-phase precipitation is "
         "not implemented; inlet composition was not changed");
-  if (C_cav.size() == 0) return;
-  for (int i = 1; i <= obiCell && i < (int)C_cav.size(); i++) {
-    if (thermalSaturationModel && i < obiCell && C_cav[i] > C_hat + 1.0e-10)
-      throw std::invalid_argument(
-          "thermal cooling requires precipitation; solid-phase mass, solvent "
-          "and heat coupling is not implemented; no clipped result is "
-          "reported: cell=" +
-          std::to_string(i) + " sg=" + std::to_string(C_cav[i]) +
-          " saturation=" + std::to_string(C_hat) +
-          " T=" + std::to_string(T_brine));
+  if (C_cav.size() == 0 || !thermalSaturationModel) return;
+  // Check every layer that holds brine in the enthalpy inventory, including
+  // a partly wetted interface cell.
+  vector<double> masses, fractions;
+  thermal_layer_masses(masses, fractions);
+  vector<double> sg(C_cav.begin() + 1, C_cav.begin() + 1 + masses.size());
+  int k = thermal_first_supersaturated(sg, masses, C_hat);
+  if (k >= 0)
+    throw std::invalid_argument(
+        "thermal cooling requires precipitation; solid-phase mass, solvent "
+        "and heat coupling is not implemented; no clipped result is "
+        "reported: cell=" +
+        std::to_string(k + 1) + " sg=" + std::to_string(sg[k]) +
+        " saturation=" + std::to_string(C_hat) +
+        " T=" + std::to_string(T_brine));
+}
+
+/**
+ * @brief Index of the first layer holding brine (mass > 0) whose sg exceeds
+ * the saturated sg, or -1 if none.
+ */
+int sansmic::thermal_first_supersaturated(const vector<double> &sg,
+                                          const vector<double> &masses,
+                                          double sg_sat) {
+  for (int k = 0; k < (int)sg.size() && k < (int)masses.size(); k++) {
+    if (masses[k] > 0.0 && sg[k] > sg_sat + 1.0e-10) return k;
   }
+  return -1;
 }
 
 /**
@@ -266,7 +292,10 @@ void sansmic::Model::thermal_step(void) {
                     fmax(fmax(thermal_old_mass, M_b), 1.0);
   if (M_out < -roundoff)
     throw std::runtime_error(
-        "native thermal mass ledger requires an unsupported inflow");
+        "temperature model: SANSMIC's brine mass ledger implies an inflow "
+        "other than injection (mass-balance correction factor " +
+        std::to_string(err_cfac) +
+        "); reduce the timestep, especially while the cavity is small");
   M_out = fmax(M_out, 0.0);
   double w_new = thermal_mean_fraction();
   double w_in = salt->wt_pct(C_inj);
@@ -282,7 +311,13 @@ void sansmic::Model::thermal_step(void) {
                        M_b;
   if (w_conserved < -1e-10 || w_conserved > 0.28)
     throw std::runtime_error(
-        "native caloric species inventory left supported range");
+        "temperature model: the salt ledger gives an impossible mean salinity "
+        "(w = " +
+        std::to_string(w_conserved) + ", mass-balance correction factor " +
+        std::to_string(err_cfac) +
+        "); SANSMIC's step is not mass-consistent. Reduce the timestep, "
+        "especially while the cavity is small (injection per step should be "
+        "well below the cavity volume)");
   w_conserved = fmax(0.0, w_conserved);
   M_saltCorrectionCum += M_b * (w_new - w_conserved);
   double rc = C_wall * water_density_lb_cf * cp_rock;  // Btu/ft3-degF
@@ -329,18 +364,36 @@ void sansmic::Model::thermal_step(void) {
  * excluding the volume occupied by insolubles.
  */
 double sansmic::Model::thermal_mean_fraction(void) {
-  double mass = 0.0, dissolved = 0.0, deposits = V_insol;
+  vector<double> masses, fractions;
+  thermal_layer_masses(masses, fractions);
+  double mass = 0.0, dissolved = 0.0;
+  for (size_t k = 0; k < masses.size(); k++) {
+    mass += masses[k];
+    dissolved += masses[k] * fractions[k];
+  }
+  return mass > 0.0 ? dissolved / mass : 0.0;
+}
+
+/**
+ * @brief Brine mass (ft3 * sg, unscaled) and NaCl weight fraction of each
+ * layer up to the interface cell: the cell volume below the interface minus
+ * the volume taken by insolubles, filled from the floor up. Shared by the
+ * enthalpy inventory and the precipitation check.
+ */
+void sansmic::Model::thermal_layer_masses(vector<double> &masses,
+                                          vector<double> &fractions) {
+  masses.clear();
+  fractions.clear();
+  double deposits = V_insol;
   for (int i = 1; i <= obiCell && i < (int)r_cav.size(); ++i) {
     double height = (i == obiCell) ? fmax(0.0, h_obi - (i - 1) * dz) : dz;
     double volume = _pi_ * sq(r_cav[i]) * height;
     double covered = fmin(deposits, volume);
     deposits -= covered;
     volume -= covered;
-    double m = volume * C_cav[i];
-    mass += m;
-    dissolved += m * salt->wt_pct(C_cav[i]);
+    masses.push_back(volume * C_cav[i]);
+    fractions.push_back(salt->wt_pct(C_cav[i]));
   }
-  return mass > 0.0 ? dissolved / mass : 0.0;
 }
 
 /**
@@ -349,18 +402,9 @@ double sansmic::Model::thermal_mean_fraction(void) {
  */
 vector<double> sansmic::Model::thermal_profile_curve(void) {
   vector<double> masses, fractions;
-  double total = 0.0, deposits = V_insol;
-  for (int i = 1; i <= obiCell && i < (int)r_cav.size(); ++i) {
-    double height = (i == obiCell) ? fmax(0.0, h_obi - (i - 1) * dz) : dz;
-    double volume = _pi_ * sq(r_cav[i]) * height;
-    double covered = fmin(deposits, volume);
-    deposits -= covered;
-    volume -= covered;
-    double mass = volume * C_cav[i];
-    total += mass;
-    masses.push_back(mass);
-    fractions.push_back(salt->wt_pct(C_cav[i]));
-  }
+  thermal_layer_masses(masses, fractions);
+  double total = 0.0;
+  for (double mass : masses) total += mass;
   if (total <= 0.0)
     throw std::runtime_error("no positive native brine profile inventory");
   double scale = m_brine * water_density_lb_cf / total;

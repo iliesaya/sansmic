@@ -26,6 +26,10 @@ PYBIND11_MODULE(libsansmic, m) {
         py::arg("heat_override") = std::nan(""),
         "list[float] : brine enthalpy coefficients for layers (temperature "
         "model)");
+  m.def("thermal_first_supersaturated", &sansmic::thermal_first_supersaturated,
+        py::arg("sg"), py::arg("masses"), py::arg("sg_sat"),
+        "int : first layer with brine above saturation, or -1 (temperature "
+        "model)");
   m.def("thermal_energy_at", &sansmic::thermal_energy_at, py::arg("T_F"),
         py::arg("curve"),
         "float : brine enthalpy (Btu) at T_F from thermal_energy_curve");

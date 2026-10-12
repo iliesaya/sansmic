@@ -21,6 +21,8 @@
 using namespace std;
 
 namespace sansmic {
+int thermal_first_supersaturated(const vector<double> &sg,
+                                 const vector<double> &masses, double sg_sat);
 vector<double> thermal_energy_curve(vector<double> masses,
                                     vector<double> fractions, double cp_salt,
                                     double heat_override = std::nan(""));
@@ -772,6 +774,7 @@ class Model : public BaseModel {
   void thermal_step(void);
   void thermal_prepare(void);
   double thermal_mean_fraction(void);
+  void thermal_layer_masses(vector<double> &masses, vector<double> &fractions);
   vector<double> thermal_profile_curve(void);
   double thermal_old_energy = 0.0;
   double thermal_old_chemical = 0.0;

@@ -385,6 +385,78 @@ class TestThermalRock(unittest.TestCase):
         self.assertLess(abs(lhs - rhs), 1.0e-6 * abs(lhs))
 
 
+class TestPrecipitationCheck(unittest.TestCase):
+    """The precipitation check must cover every layer that holds brine in the
+    enthalpy inventory, including a partly wetted interface cell."""
+
+    def test_partly_wetted_interface_cell_is_checked(self):
+        sg = [1.19, 1.19, 1.2019]  # top cell saturated at 75 degF
+        sat_50F = 1.20064  # saturated sg at 50 degF (Potter, scaled)
+        self.assertEqual(
+            LIB.thermal_first_supersaturated(sg, [1.0, 1.0, 0.3], sat_50F), 2
+        )
+
+    def test_dry_layers_and_undersaturated_brine_pass(self):
+        sat_50F = 1.20064
+        self.assertEqual(
+            LIB.thermal_first_supersaturated(
+                [1.19, 1.19, 1.2019], [1.0, 1.0, 0.0], sat_50F
+            ),
+            -1,
+        )
+        self.assertEqual(
+            LIB.thermal_first_supersaturated(
+                [1.19, 1.20, 1.2006], [1.0, 1.0, 1.0], sat_50F
+            ),
+            -1,
+        )
+
+
+class TestUnresolvedStep(unittest.TestCase):
+    def test_step_larger_than_cavity_stops_with_advice(self):
+        # 1 ft borehole (about 84 bbl); 45,000 bbl/d injects about 190 bbl per
+        # 0.1 h step, so SANSMIC's first step is not mass-consistent.
+        cells = 100
+        scenario = sansmic.model.Scenario(
+            title="unresolved first step",
+            num_cells=cells,
+            cavern_height=600.0,
+            floor_depth=4000.0,
+            geometry_data={"radii": [0.5] * (cells + 1)},
+            geometry_format=sansmic.model.GeometryFormat.RADIUS_LIST,
+            units=sansmic.model.Units.FT_IN_BBL,
+            insolubles_ratio=0.05,
+            advanced=sansmic.model.AdvancedOptions(
+                temperature_model_version=2, rock_temperature=140.0
+            ),
+        )
+        scenario.stages.append(
+            sansmic.model.StageDefinition(
+                title="leach",
+                simulation_mode=sansmic.model.SimulationMode.ORDINARY,
+                solver_timestep=0.1,
+                save_frequency=10,
+                injection_duration=24.0,
+                rest_duration=0,
+                inner_tbg_inside_diam=4.0,
+                inner_tbg_outside_diam=4.5,
+                outer_csg_inside_diam=8.0,
+                outer_csg_outside_diam=8.6,
+                brine_injection_sg=1.0,
+                brine_injection_depth=3990.0,
+                brine_production_depth=3900.0,
+                brine_injection_rate=45000.0,
+                brine_injection_temperature=86.0,
+                set_initial_conditions=True,
+                set_cavern_sg=1.2,
+                brine_interface_depth=3800.0,
+                product_injection_rate=0.0,
+            )
+        )
+        with self.assertRaisesRegex(RuntimeError, "Reduce the timestep"):
+            run(scenario)
+
+
 class TestOpenTankAnalytic(unittest.TestCase):
     """Well-mixed tank with negligible rock exchange, against solutions derived
     by hand (independent of the C++ enthalpy and ledger code)."""

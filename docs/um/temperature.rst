@@ -24,17 +24,21 @@ enthalpy, relative to water and halite at 75 °F,
 where :math:`c_{p,s}` is the halite specific heat (water: 1 Btu/lb-°F) and
 :math:`Q` the integral heat of solution per pound of NaCl at molality
 :math:`m`, interpolated in the evaluated table of Clarke and Glew (1985),
-Table 25A (10–60 °C, 0–6.4 mol/kg, atmospheric pressure). Summing per layer,
+Table 25A (10–60 °C, 0–6 mol/kg plus the saturation row, atmospheric
+pressure). Summing per layer,
 rather than using the mean salinity, keeps the non-linear dependence of
 :math:`Q` on concentration. Layer masses are scaled to SANSMIC's tracked brine
-mass.
+mass. The table ends at the saturation molality of each temperature (about
+6.11 mol/kg at 10 °C to 6.34 mol/kg at 60 °C). Above 6 mol/kg the last table
+segment is extended linearly, and states above 6.4 mol/kg are rejected.
 
 Over a timestep the brine temperature solves
 
 .. math::
 
-   H_{new}(T) + M_{out}\,h(T, w_{out}) - H_{old} - M_{in}\,h(T_{in}, w_{in})
-   - M_{salt}\,c_{p,s} (T_{wall} - 75) - Q_{rock}\,\Delta t = 0,
+   H_{new}(T) - \Delta H_{native}(T) + M_{out}\,h(T, w_{out}) - H_{old}
+   - M_{in}\,h(T_{in}, w_{in}) - M_{salt}\,c_{p,s} (T_{wall} - 75)
+   - Q_{rock}\,\Delta t = 0,
 
 where :math:`h` is the specific enthalpy above. :math:`M_{in}` and
 :math:`T_{in}` are the injected mass and
@@ -44,6 +48,20 @@ according to SANSMIC's own mass ledger, at the production-cell salinity
 at the wall temperature. The chemical heat of dissolution is not a separate
 sink: it appears through :math:`Q` in :math:`H_{new}`. A constant
 :confval:`heat-of-solution` replaces :math:`Q` for diagnostic runs only.
+
+The term
+
+.. math::
+
+   \Delta H_{native}(T) = M_{new} \left[ h(T, w_{new}) - h(T, w_{conserved})
+   \right]
+
+accounts for SANSMIC's numerical salt difference (see below). :math:`w_{new}`
+is the mean salinity of SANSMIC's corrected concentration field and
+:math:`w_{conserved}` the mean salinity implied by the salt and mass ledger
+(old salt + inflow salt + dissolved salt − outflow salt). It is a
+bulk-composition allowance evaluated at the mean salinity, unlike the layered
+inventory :math:`H_{new}`; its cumulative value is ``H_native_correction``.
 
 
 Rock
@@ -85,7 +103,8 @@ exactly conserving a separately reconstructed salt inventory. The temperature
 model does not hide that difference in the brine temperature. It reports
 
 * ``M_salt_correction``: the cumulative numerical salt difference (lb);
-* ``H_native_correction``: its enthalpy (MMBtu);
+* ``H_native_correction``: its enthalpy, the cumulative
+  :math:`\Delta H_{native}` (MMBtu);
 * ``H_stage``: inventory changes when a stage sets a new brine state;
 * ``H_inj``: inlet minus outlet enthalpy (MMBtu; not heater energy);
 * ``H_rock``: heat from the rock, including the sensible heat of dissolved salt;
@@ -119,7 +138,8 @@ The tests in ``tests/test_thermal.py`` cover:
   a steady dissolving tank;
 * the enthalpy function at printed table values, layered versus bulk
   inventories, the staged energy ledger, rejected precipitation and inlet
-  states, input validation and TOML round trips.
+  states (including a partly wetted interface cell), input validation and
+  TOML round trips.
 
 
 Scope and limits
@@ -133,6 +153,11 @@ Scope and limits
 * Atmospheric-pressure calorimetry; no pressure effects on enthalpy or
   solubility.
 * No precipitation or solid phase.
+* The energy balance needs mass-consistent SANSMIC steps. If one timestep
+  injects as much water as the cavity holds (common at startup from a small
+  borehole), SANSMIC's mass-balance correction becomes large and the run
+  stops with an error asking for a smaller timestep. Short initial stages
+  with small timesteps avoid this.
 * The temperature response of the dissolution rate comes from laboratory
   smooth-sample measurements applied to SANSMIC's empirical 75 °F curve.
 * Not validated against a measured thermal cavern.
