@@ -68,6 +68,9 @@ PYBIND11_MODULE(libsansmic, m) {
       .def_readwrite("temperature_model_version",
                      &sansmic::Scenario::temperature_model_version,
                      "int : Temperature model version, default is 0 (off)")
+      .def_readwrite("wall_slope_model", &sansmic::Scenario::wall_slope_model,
+                     "int : Wall slope in the recession update, 0 = centered "
+                     "(default), 1 = upwind")
       .def_readwrite(
           "entrainment_coeff", &sansmic::Scenario::entrainment_coeff,
           "float : Dissolution entrainment coefficient, default is 0.09")

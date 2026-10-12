@@ -34,6 +34,7 @@ sansmic::Scenario::Scenario() {
   jet_model_version = 1;
   plume_model_version = 1;
   temperature_model_version = 0;
+  wall_slope_model = 0;
   coallescing_wells = 1;
   well_separation = 0.0;
   entrainment_coeff = 0.09;
@@ -92,6 +93,7 @@ void sansmic::Scenario::debug_log(ofstream &fout) {
   fout << "      plume-model-version = " << plume_model_version << std::endl;
   fout << "      temperature-model-version = " << temperature_model_version
        << std::endl;
+  fout << "      wall-slope-model = " << wall_slope_model << std::endl;
   fout << "      entrainment-coeff = " << entrainment_coeff << std::endl;
   fout << "      diffusion-beta-coeff = " << diffusion_beta << std::endl;
   fout << "      molecular-diffusion-coeff = " << molecular_diffusion

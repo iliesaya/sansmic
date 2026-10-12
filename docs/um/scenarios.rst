@@ -81,6 +81,7 @@ The `[advanced]`_ section keys are
 * :confval:`molecular-diffusion`
 * :confval:`eddy-coefficient`
 * :confval:`diffusion-beta`
+* :confval:`wall-slope-model`
 
 ..
     * :confval:`plume-model-version`
@@ -360,6 +361,19 @@ are still available.
 
     `temperature-model-version`
     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+.. confval:: wall-slope-model
+
+    Which wall slope the wall recession update uses. The default, 0, is the
+    centered slope of the FORTRAN code. With small starting radii it can make
+    neighbouring cells recede alternately fast and slow, leaving a saw-tooth
+    or "hat" at the roof of the brine-filled cavity. 1 uses a one-sided
+    (upwind) slope from the cell below, taken from the previous timestep.
+    In the test case it suppresses the roof spike and changes total volume by
+    under 1%; other cases are not guaranteed to behave the same. This is a
+    numerical scheme choice and does not by itself make the predicted shape
+    match a sonar survey.
 
 
 .. confval:: dissolution-factor

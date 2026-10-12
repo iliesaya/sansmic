@@ -19,6 +19,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -146,6 +147,7 @@ void sansmic::Model::init_vars() {
   // set default model versions
   plumeModelVer = 1;
   tempModelVer = 0;
+  b_upwind_wall_slope = false;
   f_dis0 = 1.0;
 
   // set physical constants
@@ -171,6 +173,10 @@ void sansmic::Model::configure(Scenario scenario) {
   D_0 = scenario.eddy_coefficient;
   plumeModelVer = scenario.plume_model_version;
   tempModelVer = scenario.temperature_model_version;
+  if (scenario.wall_slope_model != 0 && scenario.wall_slope_model != 1) {
+    throw std::invalid_argument("wall_slope_model must be 0 or 1");
+  }
+  b_upwind_wall_slope = (scenario.wall_slope_model == 1);
   relerr = scenario.relative_error;
   abserr = scenario.absolute_error;
   z_TD0 = scenario.floor_depth;
@@ -263,10 +269,12 @@ void sansmic::Model::configure(Scenario scenario) {
     V_tot += _pi_ * dz * sq(r_cav[j]) * cf_to_bbl;
   }
 
+  wallSlope = vector<double>(n_nodes + 1, 0.0);
   h_cav[1] = 0.0;
   for (int i = 1; i <= n_cells; i++) {
     im = max(i - 1, 1);
     tanTheta[i] = (r_cav[i + 1] - r_cav[im]) / (dz * double(i + 1 - im));
+    wallSlope[i] = (r_cav[i] - r_cav[im]) / dz;
     theta = atan(tanTheta[i]);
     cosTheta[i] = cos(theta);
     h_cav[i + 1] = h_cav[i] + dz;
@@ -1159,6 +1167,7 @@ int sansmic::Model::leach() {
       f_dis[i] = f_disSav[i];
     }
     cosTheta[i] = cos(theta);
+    wallSlope[i] = (r_cav[i] - r_cav[im]) / dz;
   }
 
   V_tot = V_tot - V_insol;
@@ -1393,11 +1402,15 @@ void sansmic::Model::plume(double ci, double zi, double zb, double &x,
  */
 void sansmic::Model::slope(int i) {
   double tanfac, xcos, tetar, teta, ratet;
-  tanfac = 1.0 + tanTheta[i] * tanTheta[i];
+  // wall_slope_model 1: one-sided (upwind) slope from the cell below, taken
+  // from the end of the previous step. The centered slope lets neighbouring
+  // cells recede alternately fast and slow, which builds a saw-tooth roof.
+  double tanLocal = b_upwind_wall_slope ? wallSlope[i] : tanTheta[i];
+  tanfac = 1.0 + tanLocal * tanLocal;
   xcos = 1.0 / std::sqrt(tanfac);
   tetar = std::acos(xcos);
 
-  if (tanTheta[i] >= 0.0) {
+  if (tanLocal >= 0.0) {
     x_incl[i] = std::sqrt(xcos);
     phi[i] = 90.0 - 57.29 * tetar;
   } else {

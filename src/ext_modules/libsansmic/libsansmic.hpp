@@ -156,6 +156,8 @@ struct Scenario {
   int jet_model_version;          //!< the ver for the jet model (0 = off)
   int plume_model_version;        //!< the ver for the plume model (always 1)
   int temperature_model_version;  //!< the ver for the temp model (always 0)
+  int wall_slope_model;  //!< wall slope used in the recession update:
+                         //!< 0 = centered (original), 1 = upwind
 
   double max_brine_sg;         //!< maximum brine density
   double solid_density;        //!< solid density of salt rock
@@ -499,6 +501,9 @@ class Model : public BaseModel {
 
  private:
   void init_vars(void);
+
+  bool b_upwind_wall_slope;   //!< use the upwind wall slope (wall_slope_model 1)
+  vector<double> wallSlope;   //!< upwind wall slope dr/dz from the previous step
 
   string Q_fill_table_name;  //!< name of fill table file
   string Q_inj_table_name;   //!< name of injection table file

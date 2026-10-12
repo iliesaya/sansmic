@@ -152,6 +152,10 @@ class AdvancedOptions:
     """Plume model version; CScenario default is 1"""
     temperature_model_version: int = None  #  0
     """Temperature model version; CScenario default is 0"""
+    wall_slope_model: int = None  #  0
+    """Wall slope used in the wall recession update; CScenario default is 0
+    (centered, as in the FORTRAN code). 1 uses a one-sided (upwind) slope from
+    the previous timestep, which avoids saw-tooth roof profiles."""
     dissolution_factor: float = None  # 1.0
     """Dissolution factor; CScenario default is 1.0 - this should not be changed unless you are sure you know the effects"""
     max_brine_sg: float = None  #  1.2019
@@ -997,6 +1001,12 @@ class Scenario:
         if self.advanced.solid_density is not None:
             cscenario.solid_density = self.advanced.solid_density
 
+        if self.advanced.wall_slope_model is not None:
+            if self.advanced.wall_slope_model not in (0, 1) or isinstance(
+                self.advanced.wall_slope_model, bool
+            ):
+                raise ValueError("wall_slope_model must be 0 or 1")
+            cscenario.wall_slope_model = int(self.advanced.wall_slope_model)
         if self.advanced.temperature_model_version is not None:
             cscenario.temperature_model_version = (
                 self.advanced.temperature_model_version
